@@ -6,7 +6,7 @@
 <title>TIC · TAC · TOE</title>
 <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Share+Tech+Mono&display=swap" rel="stylesheet">
 <style>
-  /* ─── All your styles unchanged ─── */
+  /* ─── all your styles (unchanged) ─── */
   :root {
     --bg: #080c14;
     --panel: #0d1424;
@@ -256,7 +256,7 @@
 
 <script>
 // ══════════════════════════════════════════
-//  CONFIG – your live Render WebSocket server
+//  CONFIG — your live Render WebSocket server
 // ══════════════════════════════════════════
 const WS_URL = 'wss://anichan-game-server.onrender.com';
 
@@ -268,9 +268,9 @@ let sc = scBank.pvp;
 
 // multiplayer
 let ws = null;
-let mySymbol = null;          // 'X' or 'O'
-let onlineTurn = null;        // whose turn according to server start
-let waitingForOpponent = false;
+let mySymbol = null;
+let retryCount = 0;
+const MAX_RETRIES = 5;
 
 let autoTimer = null, countTimer = null;
 
@@ -292,9 +292,7 @@ function init() {
   });
   document.querySelectorAll('.win-line').forEach(e => e.remove());
 
-  if (mode === 'online') {
-    // status will be set by ws events
-  } else {
+  if (mode !== 'online') {
     const startLbl = mode === 'cpu' && starter === 'O' ? 'CPU O — THINKING...' : 'PLAYER ' + starter + ' — YOUR MOVE';
     setStatus(startLbl, starter === 'X' ? 'sx' : 'so');
   }
@@ -323,13 +321,11 @@ function tap(i) {
   if (over || state[i]) return;
   if (mode === 'cpu' && turn === 'O') return;
   if (mode === 'online') {
-    // must be our turn and our symbol
     if (turn !== mySymbol) return;
-    // send move to server
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: 'move', data: { index: i } }));
     }
-    place(i);  // apply locally (server just relays)
+    place(i);
     return;
   }
   place(i);
@@ -412,22 +408,35 @@ function updateSc() {
   document.getElementById('num-d').textContent=sc.D;
 }
 
-// ── WebSocket connection & handlers ──
+// ── WebSocket with automatic retry ──
 function connectOnline() {
-  if (ws) { ws.close(); ws = null; }
+  if (ws) {
+    ws.onclose = null;   // prevent old close handler from triggering
+    ws.close();
+    ws = null;
+  }
+  retryCount = 0;
+  tryOnlineConnection();
+}
+
+function tryOnlineConnection() {
+  setStatus('WAKING SERVER...', 'sy');
   ws = new WebSocket(WS_URL);
+
   ws.onopen = () => {
+    setStatus('CONNECTED. WAITING FOR OPPONENT...', 'sy');
     ws.send(JSON.stringify({ type: 'join', game: 'tic-tac-toe' }));
-    setStatus('SEARCHING FOR OPPONENT...', 'sy');
+    retryCount = 0;   // reset on success
   };
+
   ws.onmessage = (e) => {
     const msg = JSON.parse(e.data);
     if (msg.type === 'waiting') {
       setStatus('WAITING FOR OPPONENT...', 'sy');
     } else if (msg.type === 'start') {
       mySymbol = msg.symbol;
-      starter = 'X';   // online always X starts
-      turn = 'X';      // match server
+      starter = 'X';
+      turn = 'X';
       if (mySymbol === 'X') {
         document.getElementById('lbl-x').textContent = 'YOU (X)';
         document.getElementById('lbl-o').textContent = 'OPPONENT (O)';
@@ -439,10 +448,9 @@ function connectOnline() {
       setStatus(mySymbol === turn ? 'YOUR MOVE' : 'OPPONENT\'S MOVE', turn === 'X' ? 'sx' : 'so');
       highlight();
     } else if (msg.type === 'move') {
-      // opponent moved
       const idx = msg.data.index;
       if (!state[idx] && !over) {
-        turn = mySymbol === 'X' ? 'O' : 'X';  // force turn to opponent's symbol
+        turn = mySymbol === 'X' ? 'O' : 'X';
         place(idx);
       }
     } else if (msg.type === 'opponent_disconnected') {
@@ -453,24 +461,42 @@ function connectOnline() {
       setMode('pvp');
     }
   };
-  ws.onerror = () => {
-    setStatus('CONNECTION ERROR', 'sd');
-    ws.close();
-    ws = null;
-    setMode('pvp');
+
+  ws.onerror = (err) => {
+    // ignore the error; we'll handle retry in onclose
+    console.log('WebSocket error, will retry');
   };
-  ws.onclose = () => {
-    // may be called on manual leave
+
+  ws.onclose = (event) => {
+    // if we haven't received a start message and we still want online mode, retry
+    if (!mySymbol && mode === 'online' && retryCount < MAX_RETRIES) {
+      retryCount++;
+      const delay = Math.min(3000 * retryCount, 15000);  // exponential backoff up to 15s
+      setStatus(`RETRYING IN ${Math.round(delay/1000)}s...`, 'sy');
+      setTimeout(tryOnlineConnection, delay);
+    } else if (mySymbol && mode === 'online') {
+      // we were already in a game, but the connection dropped
+      setStatus('CONNECTION LOST', 'sd');
+      over = true;
+      ws = null;
+      // don't switch mode automatically
+    } else if (!mySymbol && mode === 'online') {
+      // max retries reached
+      setStatus('COULD NOT CONNECT', 'sd');
+      ws = null;
+      setMode('pvp');
+    }
   };
 }
 
 function leaveOnline() {
   if (ws) {
+    ws.onclose = null;  // prevent retry
     ws.close();
     ws = null;
   }
   mySymbol = null;
-  waitingForOpponent = false;
+  retryCount = 0;
   document.getElementById('lbl-x').textContent = 'PLAYER X';
   document.getElementById('lbl-o').textContent = 'PLAYER O';
 }
@@ -484,12 +510,11 @@ function setMode(m) {
     document.getElementById('pvp-btn').classList.remove('on');
     document.getElementById('cpu-btn').classList.remove('on');
     document.getElementById('online-btn').classList.add('on');
-    document.getElementById('lbl-o').textContent = 'PLAYER O'; // will be updated on start
+    document.getElementById('lbl-o').textContent = 'PLAYER O';
     updateSc();
-    newGame();  // resets board and starts online flow
+    newGame();   // resets board and starts online flow
     connectOnline();
   } else {
-    if (mode === 'online') leaveOnline();
     starter = 'X';
     mode = m;
     sc = scBank[m];
@@ -513,9 +538,8 @@ function newGame() {
       c.querySelector('.mark').textContent = '';
     });
     document.querySelectorAll('.win-line').forEach(e => e.remove());
-    if (ws) { ws.close(); ws = null; }
+    if (ws) { ws.onclose = null; ws.close(); ws = null; }
     connectOnline();
-    setStatus('SEARCHING FOR OPPONENT...', 'sy');
   } else {
     init();
   }
