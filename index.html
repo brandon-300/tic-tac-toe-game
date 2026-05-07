@@ -443,6 +443,32 @@ let autoReconnectTimer = null;
 let chatOpen = false;
 let autoTimer = null, countTimer = null;
 
+// ─── Persistent AudioContext ───
+let audioCtx = null;
+function getAudioCtx() {
+  if (!audioCtx) {
+    try {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    } catch(e) {}
+  }
+  return audioCtx;
+}
+
+function playTap() {
+  const ctx = getAudioCtx();
+  if (!ctx) return;
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.frequency.value = 800;
+  osc.type = 'sine';
+  gain.gain.setValueAtTime(0.3, ctx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.08);
+  osc.connect(gain);
+  gain.connect(ctx.destination);
+  osc.start(ctx.currentTime);
+  osc.stop(ctx.currentTime + 0.08);
+}
+
 // ─── Session storage ───
 function saveSession() {
   if (!roomId || !mySymbol || mode !== 'online') return;
@@ -462,7 +488,6 @@ function loadSession() {
     const raw = localStorage.getItem(SESSION_KEY);
     if (!raw) return null;
     const data = JSON.parse(raw);
-    // Expire after 5 minutes
     if (Date.now() - data.timestamp > 300000) {
       localStorage.removeItem(SESSION_KEY);
       return null;
@@ -474,28 +499,7 @@ function loadSession() {
 function updateRejoinButton() {
   const session = loadSession();
   const btn = document.getElementById('rejoin-btn');
-  if (session) {
-    btn.style.display = 'block';
-  } else {
-    btn.style.display = 'none';
-  }
-}
-
-// ─── Sound ───
-function playTap() {
-  try {
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.frequency.value = 800;
-    osc.type = 'sine';
-    gain.gain.setValueAtTime(0.3, ctx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.08);
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-    osc.start(ctx.currentTime);
-    osc.stop(ctx.currentTime + 0.08);
-  } catch(e) {}
+  btn.style.display = session ? 'block' : 'none';
 }
 
 function clearTimers() {
@@ -583,7 +587,7 @@ function place(i) {
     const lbl = mode === 'cpu' && turn === 'O' ? 'CPU O — THINKING...' : (mode === 'online' ? (turn === mySymbol ? 'YOUR MOVE' : 'OPPONENT\'S MOVE') : 'PLAYER ' + turn + ' — YOUR MOVE');
     setStatus(lbl, turn === 'X' ? 'sx' : 'so');
     highlight();
-    saveSession(); // update stored board state
+    if (mode === 'online') saveSession();
   }
 }
 
@@ -592,7 +596,7 @@ function winner() {
   return null;
 }
 
-// ─── AI ───
+// ─── Very Hard AI ───
 function cpuGo() {
   const best = minimax(state.slice(), 'O', 0, -Infinity, Infinity);
   if (best.index !== undefined) place(best.index);
@@ -757,8 +761,7 @@ function rejoinSession() {
   roomCode = session.code;
   waitingSubMenu = roomCode ? 'private' : 'public';
   showWaitingScreen('RECONNECTING...');
-  ws = new WebSocket(WS_URL);
-  ws.onopen = () => {
+  connectAndSend(() => {
     ws.send(JSON.stringify({
       type: 'rejoin',
       game: 'tic-tac-toe',
@@ -766,8 +769,7 @@ function rejoinSession() {
       symbol: mySymbol,
       code: roomCode || undefined,
     }));
-  };
-  setupWS();
+  });
 }
 
 function showWaitingScreen(msg) {
@@ -814,45 +816,43 @@ function disconnectOnline() {
   clearSession();
 }
 
-// ─── WebSocket ───
-function sendCreateRoom(type, code) {
+// ─── Robust connection helpers ───
+function connectAndSend(onOpen) {
   disconnectOnline();
-  const doCreate = () => {
-    ws = new WebSocket(WS_URL);
-    ws.onopen = () => {
-      const msg = type === 'public'
-        ? JSON.stringify({ type: 'create_public', game: 'tic-tac-toe' })
-        : JSON.stringify({ type: 'create_private', game: 'tic-tac-toe', code });
-      ws.send(msg);
-      showStatus('WAITING FOR OPPONENT...', 0);
-      clearWaitingTimer();
-      waitingTimer = setTimeout(() => {
-        if (waitingMode === 'create') { cancelWaiting(); showStatus('NO OPPONENT JOINED', 3000); }
-      }, 600000);
-    };
-    setupWS();
+  ws = new WebSocket(WS_URL);
+  ws.onopen = () => {
+    if (onOpen) onOpen();
   };
-  doCreate();
+  setupWS();
+  return ws;
+}
+
+function sendCreateRoom(type, code) {
+  connectAndSend(() => {
+    const msg = type === 'public'
+      ? JSON.stringify({ type: 'create_public', game: 'tic-tac-toe' })
+      : JSON.stringify({ type: 'create_private', game: 'tic-tac-toe', code });
+    ws.send(msg);
+    showStatus('WAITING FOR OPPONENT...', 0);
+    clearWaitingTimer();
+    waitingTimer = setTimeout(() => {
+      if (waitingMode === 'create') { cancelWaiting(); showStatus('NO OPPONENT JOINED', 3000); }
+    }, 600000);
+  });
 }
 
 function sendJoinRoom(type, code) {
-  disconnectOnline();
-  const doJoin = () => {
-    ws = new WebSocket(WS_URL);
-    ws.onopen = () => {
-      const msg = type === 'public'
-        ? JSON.stringify({ type: 'join_public', game: 'tic-tac-toe' })
-        : JSON.stringify({ type: 'join_private', game: 'tic-tac-toe', code });
-      ws.send(msg);
-      showStatus('SEARCHING FOR GAME...', 0);
-      clearWaitingTimer();
-      waitingTimer = setTimeout(() => {
-        if (waitingMode === 'join') { cancelWaiting(); showStatus(type==='private'?'NO ROOM FOUND':'NO OPPONENT FOUND', 3000); }
-      }, 600000);
-    };
-    setupWS();
-  };
-  doJoin();
+  connectAndSend(() => {
+    const msg = type === 'public'
+      ? JSON.stringify({ type: 'join_public', game: 'tic-tac-toe' })
+      : JSON.stringify({ type: 'join_private', game: 'tic-tac-toe', code });
+    ws.send(msg);
+    showStatus('SEARCHING FOR GAME...', 0);
+    clearWaitingTimer();
+    waitingTimer = setTimeout(() => {
+      if (waitingMode === 'join') { cancelWaiting(); showStatus(type==='private'?'NO ROOM FOUND':'NO OPPONENT FOUND', 3000); }
+    }, 600000);
+  });
 }
 
 function setupWS() {
@@ -865,6 +865,20 @@ function onWSClose(event) {
   if (mode === 'online' && mySymbol && roomId && !over) {
     setStatus('CONNECTION LOST - RECONNECTING...', 'sd');
     scheduleReconnect();
+  } else if (mode === 'online' && waitingMode && !over) {
+    // Initial connection failed – retry
+    const delay = 2000;
+    showStatus(`RETRYING IN ${delay/1000}s...`, 0);
+    retryTimer = setTimeout(() => {
+      if (waitingSubMenu === 'public') {
+        // Re‑attempt create/join based on waitingMode
+        if (waitingMode === 'create') sendCreateRoom('public');
+        else sendJoinRoom('public');
+      } else if (waitingSubMenu === 'private') {
+        if (waitingMode === 'create') sendCreateRoom('private', roomCode);
+        else sendJoinRoom('private', roomCode);
+      }
+    }, delay);
   }
 }
 
@@ -1040,7 +1054,7 @@ function newGame() {
   cells.forEach(c => { c.className = ''; c.querySelector('.mark').textContent = ''; });
   turn = starter;
   if (mode === 'online') {
-    // game restarted via rematch start message
+    // board will be set by start/resume
   } else {
     init();
   }
