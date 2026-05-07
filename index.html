@@ -6,7 +6,7 @@
 <title>TIC · TAC · TOE</title>
 <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Share+Tech+Mono&display=swap" rel="stylesheet">
 <style>
-  /* ─── all your styles (unchanged) ─── */
+  /* ─── All original styles ─── */
   :root {
     --bg: #080c14;
     --panel: #0d1424;
@@ -110,7 +110,7 @@
   .status.so { color: var(--o-color); }
   .status.sw { color: var(--win-color); text-shadow: 0 0 10px var(--win-glow); animation: blink 0.6s ease-in-out infinite alternate; }
   .status.sd { color: var(--bright); }
-  .status.sy { color: var(--o-color); } /* online waiting */
+  .status.sy { color: var(--o-color); }
   @keyframes blink { from { opacity:0.6; } to { opacity:1; } }
 
   .board-wrap { position: relative; }
@@ -162,7 +162,7 @@
     height: 4px;
     background: var(--win-color);
     box-shadow: 0 0 14px var(--win-glow), 0 0 30px var(--win-glow);
-    border-radius: 4px;
+    border-radius: 2px;
     transform-origin: left center;
     animation: draw 0.35s ease-out both;
     z-index: 20;
@@ -193,6 +193,98 @@
   .c.tr { top:16px; right:16px; border-top:2px solid var(--o-color); border-right:2px solid var(--o-color); }
   .c.bl { bottom:16px; left:16px;  border-bottom:2px solid var(--o-color); border-left:2px solid var(--o-color); }
   .c.br { bottom:16px; right:16px; border-bottom:2px solid var(--o-color); border-right:2px solid var(--o-color); }
+
+  /* Online menus & prompts */
+  #online-menu, #code-prompt {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.85);
+    backdrop-filter: blur(8px);
+    z-index: 100;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 20px;
+    padding: 20px;
+  }
+  #online-menu.on, #code-prompt.on { display: flex; }
+
+  .menu-card {
+    background: rgba(20,14,8,.95);
+    border: 1px solid var(--border);
+    padding: 30px;
+    text-align: center;
+    max-width: 320px;
+    width: 90%;
+  }
+
+  .menu-btn {
+    font-family: 'Orbitron', monospace;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.15em;
+    background: transparent;
+    border: 1px solid var(--o-color);
+    color: var(--o-color);
+    padding: 12px 24px;
+    cursor: pointer;
+    transition: 0.2s;
+    margin: 8px 5px;
+    text-transform: uppercase;
+    width: 100%;
+  }
+  .menu-btn:active { background: rgba(0,229,255,0.18); }
+
+  .menu-input {
+    background: rgba(255,255,255,0.05);
+    border: 1px solid var(--border);
+    color: var(--bright);
+    padding: 10px;
+    font-family: 'Orbitron', monospace;
+    font-size: 18px;
+    letter-spacing: 0.1em;
+    text-align: center;
+    width: 100%;
+    outline: none;
+    autocapitalize: none;
+    autocomplete: off;
+  }
+
+  #status-msg {
+    position: fixed;
+    top: 10px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(0,0,0,0.8);
+    color: var(--o-color);
+    padding: 10px 20px;
+    font-family: 'Orbitron', monospace;
+    font-size: 11px;
+    z-index: 150;
+    display: none;
+    letter-spacing: 0.12em;
+  }
+
+  #cancel-waiting {
+    display: none;
+    position: fixed;
+    bottom: 80px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 200;
+    font-family: 'Orbitron', monospace;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--dim);
+    padding: 10px 30px;
+    cursor: pointer;
+    text-transform: uppercase;
+  }
+  #cancel-waiting:active { color: var(--o-color); border-color: var(--o-color); }
 </style>
 </head>
 <body>
@@ -254,10 +346,47 @@
   </div>
 </div>
 
+<!-- Online sub-menus -->
+<div id="online-menu">
+  <div id="online-main" class="menu-card">
+    <h2 style="color:var(--o-color); margin-bottom:20px;">ONLINE PLAY</h2>
+    <button class="menu-btn" onclick="showPublicOptions()">PUBLIC</button>
+    <button class="menu-btn" onclick="showPrivateOptions()">PRIVATE</button>
+    <button class="menu-btn" onclick="hideOnlineMenu()">BACK</button>
+  </div>
+  <div id="online-public" class="menu-card" style="display:none;">
+    <h2 style="color:var(--o-color); margin-bottom:20px;">PUBLIC GAME</h2>
+    <button class="menu-btn" onclick="createRoom('public')">CREATE ROOM</button>
+    <button class="menu-btn" onclick="joinRoom('public')">JOIN ROOM</button>
+    <button class="menu-btn" onclick="backToOnlineMain()">BACK</button>
+  </div>
+  <div id="online-private" class="menu-card" style="display:none;">
+    <h2 style="color:var(--o-color); margin-bottom:20px;">PRIVATE GAME</h2>
+    <button class="menu-btn" onclick="showCodePrompt('create')">CREATE ROOM</button>
+    <button class="menu-btn" onclick="showCodePrompt('join')">JOIN ROOM</button>
+    <button class="menu-btn" onclick="backToOnlineMain()">BACK</button>
+  </div>
+</div>
+
+<!-- Code input -->
+<div id="code-prompt">
+  <div class="menu-card">
+    <h2 id="code-prompt-title" style="color:var(--o-color); margin-bottom:16px;"></h2>
+    <input type="text" id="code-input" class="menu-input" maxlength="20" placeholder="CODE" autocapitalize="none" autocomplete="off" autocorrect="off" spellcheck="false">
+    <div style="margin-top:16px;">
+      <button class="menu-btn" onclick="submitCode()">OK</button>
+      <button class="menu-btn" onclick="hideCodePrompt()">CANCEL</button>
+    </div>
+  </div>
+</div>
+
+<!-- Status message -->
+<div id="status-msg"></div>
+
+<!-- Cancel waiting button -->
+<button id="cancel-waiting" onclick="cancelWaiting()">CANCEL</button>
+
 <script>
-// ══════════════════════════════════════════
-//  CONFIG — your live Render WebSocket server
-// ══════════════════════════════════════════
 const WS_URL = 'wss://anichan-game-server.onrender.com';
 
 const WINS = [[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]];
@@ -266,11 +395,15 @@ let starter = 'X';
 const scBank = { pvp: {X:0,O:0,D:0}, cpu: {X:0,O:0,D:0}, online: {X:0,O:0,D:0} };
 let sc = scBank.pvp;
 
-// multiplayer
+// Multiplayer state
 let ws = null;
 let mySymbol = null;
+let waitingTimer = null;
+let waitingMode = null;          // 'create' or 'join'
+let waitingSubMenu = null;       // 'public' or 'private'
 let retryCount = 0;
 const MAX_RETRIES = 5;
+let retryTimer = null;
 
 let autoTimer = null, countTimer = null;
 
@@ -290,6 +423,7 @@ function init() {
     c.className = '';
     c.querySelector('.mark').textContent = '';
   });
+  // Clear any leftover win lines
   document.querySelectorAll('.win-line').forEach(e => e.remove());
 
   if (mode !== 'online') {
@@ -323,7 +457,7 @@ function tap(i) {
   if (mode === 'online') {
     if (turn !== mySymbol) return;
     if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: 'move', data: { index: i } }));
+      ws.send(JSON.stringify({ type: 'move', game: 'tic-tac-toe', data: { index: i } }));
     }
     place(i);
     return;
@@ -377,18 +511,34 @@ function bestMove() {
 
 function canWin(p) { return WINS.some(w => w.every(i => state[i]===p)); }
 
+// ─── PERFECT win line drawing ───
 function drawWin(combo) {
+  // Remove any existing win lines first
+  document.querySelectorAll('.win-line').forEach(e => e.remove());
+
   const wrap = document.getElementById('board-wrap');
   const wr = wrap.getBoundingClientRect();
   const a = cells[combo[0]].getBoundingClientRect();
   const b = cells[combo[2]].getBoundingClientRect();
-  const x1=a.left+a.width/2-wr.left, y1=a.top+a.height/2-wr.top;
-  const x2=b.left+b.width/2-wr.left, y2=b.top+b.height/2-wr.top;
-  const len=Math.hypot(x2-x1,y2-y1);
-  const ang=Math.atan2(y2-y1,x2-x1)*180/Math.PI;
-  const ln=document.createElement('div');
-  ln.className='win-line';
-  ln.style.cssText='width:'+(len+16)+'px;left:'+(x1-8)+'px;top:'+(y1-2)+'px;transform:rotate('+ang+'deg);';
+
+  // Center of the first winning cell
+  const x1 = a.left + a.width/2 - wr.left;
+  const y1 = a.top + a.height/2 - wr.top;
+  // Center of the last winning cell
+  const x2 = b.left + b.width/2 - wr.left;
+  const y2 = b.top + b.height/2 - wr.top;
+
+  const len = Math.hypot(x2 - x1, y2 - y1);
+  const ang = Math.atan2(y2 - y1, x2 - x1) * 180 / Math.PI;
+
+  const ln = document.createElement('div');
+  ln.className = 'win-line';
+  ln.style.cssText = `
+    width: ${len}px;
+    left: ${x1}px;
+    top: ${y1 - 2}px;        /* minus half the line height to vertically centre */
+    transform: rotate(${ang}deg);
+  `;
   wrap.appendChild(ln);
 }
 
@@ -408,101 +558,264 @@ function updateSc() {
   document.getElementById('num-d').textContent=sc.D;
 }
 
-// ── WebSocket with automatic retry ──
-function connectOnline() {
-  if (ws) {
-    ws.onclose = null;   // prevent old close handler from triggering
-    ws.close();
-    ws = null;
-  }
-  retryCount = 0;
-  tryOnlineConnection();
+// ──────────────────── Online UI functions ────────────────────
+function showOnlineMenu() {
+  document.getElementById('online-menu').classList.add('on');
+  document.getElementById('online-main').style.display = '';
+  document.getElementById('online-public').style.display = 'none';
+  document.getElementById('online-private').style.display = 'none';
 }
 
-function tryOnlineConnection() {
-  setStatus('WAKING SERVER...', 'sy');
-  ws = new WebSocket(WS_URL);
-
-  ws.onopen = () => {
-    setStatus('CONNECTED. WAITING FOR OPPONENT...', 'sy');
-    ws.send(JSON.stringify({ type: 'join', game: 'tic-tac-toe' }));
-    retryCount = 0;   // reset on success
-  };
-
-  ws.onmessage = (e) => {
-    const msg = JSON.parse(e.data);
-    if (msg.type === 'waiting') {
-      setStatus('WAITING FOR OPPONENT...', 'sy');
-    } else if (msg.type === 'start') {
-      mySymbol = msg.symbol;
-      starter = 'X';
-      turn = 'X';
-      if (mySymbol === 'X') {
-        document.getElementById('lbl-x').textContent = 'YOU (X)';
-        document.getElementById('lbl-o').textContent = 'OPPONENT (O)';
-      } else {
-        document.getElementById('lbl-x').textContent = 'OPPONENT (X)';
-        document.getElementById('lbl-o').textContent = 'YOU (O)';
-      }
-      updateSc();
-      setStatus(mySymbol === turn ? 'YOUR MOVE' : 'OPPONENT\'S MOVE', turn === 'X' ? 'sx' : 'so');
-      highlight();
-    } else if (msg.type === 'move') {
-      const idx = msg.data.index;
-      if (!state[idx] && !over) {
-        turn = mySymbol === 'X' ? 'O' : 'X';
-        place(idx);
-      }
-    } else if (msg.type === 'opponent_disconnected') {
-      setStatus('OPPONENT DISCONNECTED', 'sd');
-      over = true;
-      ws.close();
-      ws = null;
-      setMode('pvp');
-    }
-  };
-
-  ws.onerror = (err) => {
-    // ignore the error; we'll handle retry in onclose
-    console.log('WebSocket error, will retry');
-  };
-
-  ws.onclose = (event) => {
-    // if we haven't received a start message and we still want online mode, retry
-    if (!mySymbol && mode === 'online' && retryCount < MAX_RETRIES) {
-      retryCount++;
-      const delay = Math.min(3000 * retryCount, 15000);  // exponential backoff up to 15s
-      setStatus(`RETRYING IN ${Math.round(delay/1000)}s...`, 'sy');
-      setTimeout(tryOnlineConnection, delay);
-    } else if (mySymbol && mode === 'online') {
-      // we were already in a game, but the connection dropped
-      setStatus('CONNECTION LOST', 'sd');
-      over = true;
-      ws = null;
-      // don't switch mode automatically
-    } else if (!mySymbol && mode === 'online') {
-      // max retries reached
-      setStatus('COULD NOT CONNECT', 'sd');
-      ws = null;
-      setMode('pvp');
-    }
-  };
+function hideOnlineMenu() {
+  document.getElementById('online-menu').classList.remove('on');
+  // Return to local pvp mode
+  setMode('pvp');
 }
 
-function leaveOnline() {
-  if (ws) {
-    ws.onclose = null;  // prevent retry
-    ws.close();
-    ws = null;
+function showPublicOptions() {
+  document.getElementById('online-main').style.display = 'none';
+  document.getElementById('online-public').style.display = '';
+  document.getElementById('online-private').style.display = 'none';
+}
+
+function showPrivateOptions() {
+  document.getElementById('online-main').style.display = 'none';
+  document.getElementById('online-public').style.display = 'none';
+  document.getElementById('online-private').style.display = '';
+}
+
+function backToOnlineMain() {
+  document.getElementById('online-main').style.display = '';
+  document.getElementById('online-public').style.display = 'none';
+  document.getElementById('online-private').style.display = 'none';
+}
+
+let pendingAction = null;
+
+function showCodePrompt(action) {
+  pendingAction = action;
+  document.getElementById('code-prompt').classList.add('on');
+  document.getElementById('online-menu').classList.remove('on');
+  document.getElementById('code-input').value = '';
+  document.getElementById('code-prompt-title').textContent = action === 'create' ? 'SET A ROOM CODE' : 'ENTER ROOM CODE';
+  setTimeout(() => document.getElementById('code-input').focus(), 100);
+}
+
+function hideCodePrompt() {
+  document.getElementById('code-prompt').classList.remove('on');
+  document.getElementById('online-menu').classList.add('on');
+}
+
+function submitCode() {
+  const code = document.getElementById('code-input').value.trim();
+  if (!/^[A-Za-z0-9]+$/.test(code)) {
+    showStatus('Only letters and numbers allowed', 2000);
+    return;
   }
+  hideCodePrompt();
+  if (pendingAction === 'create') {
+    waitingSubMenu = 'private';
+    showWaitingScreen('WAITING FOR OPPONENT...');
+    sendCreateRoom('private', code);
+  } else {
+    joinRoom('private', code);
+  }
+}
+
+function createRoom(type) {
+  waitingSubMenu = type;
+  showWaitingScreen('WAITING FOR OPPONENT...');
+  sendCreateRoom(type, type === 'public' ? null : undefined); // public has no code
+}
+
+function joinRoom(type, code) {
+  waitingSubMenu = type;
+  showWaitingScreen('SEARCHING FOR GAME...');
+  sendJoinRoom(type, code);
+}
+
+function showWaitingScreen(msg) {
+  document.getElementById('online-menu').classList.remove('on');
+  document.getElementById('code-prompt').classList.remove('on');
+  document.getElementById('cancel-waiting').style.display = 'block';
+  showStatus(msg, 0);
+  waitingMode = msg.includes('WAITING') ? 'create' : 'join';
+}
+
+function cancelWaiting() {
+  clearTimeout(retryTimer);
+  clearWaitingTimer();
+  waitingMode = null;
+  document.getElementById('cancel-waiting').style.display = 'none';
+  hideStatus();
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: 'leave_room', game: 'tic-tac-toe' }));
+  }
+  disconnectOnline();
+  // Return to appropriate sub-menu
+  if (waitingSubMenu === 'public') {
+    showPublicOptions();
+    document.getElementById('online-menu').classList.add('on');
+  } else if (waitingSubMenu === 'private') {
+    showPrivateOptions();
+    document.getElementById('online-menu').classList.add('on');
+  } else {
+    showOnlineMenu();
+  }
+}
+
+function clearWaitingTimer() {
+  if (waitingTimer) { clearTimeout(waitingTimer); waitingTimer = null; }
+}
+
+function disconnectOnline() {
+  clearTimeout(retryTimer);
+  clearWaitingTimer();
+  if (ws) { ws.onclose = null; ws.close(); ws = null; }
   mySymbol = null;
   retryCount = 0;
-  document.getElementById('lbl-x').textContent = 'PLAYER X';
-  document.getElementById('lbl-o').textContent = 'PLAYER O';
 }
 
+// ──────────────────── WebSocket connection with retry ────────────────────
+function sendCreateRoom(type, code) {
+  retryCount = 0;
+  showStatus('CONNECTING...', 0);
+  disconnectOnline();
+  attemptCreateRoom(type, code);
+}
+
+function attemptCreateRoom(type, code) {
+  if (retryCount >= MAX_RETRIES) {
+    hideStatus();
+    showStatus('COULD NOT CONNECT', 2000);
+    cancelWaiting();
+    return;
+  }
+  ws = new WebSocket(WS_URL);
+  ws.onopen = () => {
+    let msg;
+    if (type === 'public') {
+      msg = JSON.stringify({ type: 'create_public', game: 'tic-tac-toe' });
+    } else {
+      msg = JSON.stringify({ type: 'create_private', game: 'tic-tac-toe', code });
+    }
+    ws.send(msg);
+    showStatus('WAITING FOR OPPONENT...', 0);
+    retryCount = 0;
+    clearWaitingTimer();
+    waitingTimer = setTimeout(() => {
+      if (waitingMode === 'create') {
+        cancelWaiting();
+        showStatus('NO OPPONENT JOINED', 3000);
+      }
+    }, 600000); // 10 minutes
+  };
+  ws.onmessage = handleWSMessage;
+  ws.onerror = () => {};
+  ws.onclose = () => {
+    if (waitingMode === 'create' && !mySymbol) {
+      retryCount++;
+      const delay = Math.min(2000 * retryCount, 10000);
+      showStatus(`RETRYING IN ${Math.round(delay/1000)}s...`, 0);
+      retryTimer = setTimeout(() => attemptCreateRoom(type, code), delay);
+    }
+  };
+}
+
+function sendJoinRoom(type, code) {
+  retryCount = 0;
+  showStatus('CONNECTING...', 0);
+  disconnectOnline();
+  attemptJoinRoom(type, code);
+}
+
+function attemptJoinRoom(type, code) {
+  if (retryCount >= MAX_RETRIES) {
+    hideStatus();
+    showStatus('COULD NOT CONNECT', 2000);
+    cancelWaiting();
+    return;
+  }
+  ws = new WebSocket(WS_URL);
+  ws.onopen = () => {
+    let msg;
+    if (type === 'public') {
+      msg = JSON.stringify({ type: 'join_public', game: 'tic-tac-toe' });
+    } else {
+      msg = JSON.stringify({ type: 'join_private', game: 'tic-tac-toe', code });
+    }
+    ws.send(msg);
+    showStatus('SEARCHING FOR GAME...', 0);
+    retryCount = 0;
+    clearWaitingTimer();
+    waitingTimer = setTimeout(() => {
+      if (waitingMode === 'join') {
+        cancelWaiting();
+        if (type === 'private') showStatus('NO ROOM FOUND FOR THAT CODE', 3000);
+        else showStatus('NO OPPONENT FOUND', 3000);
+      }
+    }, 600000);
+  };
+  ws.onmessage = handleWSMessage;
+  ws.onerror = () => {};
+  ws.onclose = () => {
+    if (waitingMode === 'join' && !mySymbol) {
+      retryCount++;
+      const delay = Math.min(2000 * retryCount, 10000);
+      showStatus(`RETRYING IN ${Math.round(delay/1000)}s...`, 0);
+      retryTimer = setTimeout(() => attemptJoinRoom(type, code), delay);
+    }
+  };
+}
+
+function handleWSMessage(e) {
+  const msg = JSON.parse(e.data);
+  if (msg.type === 'room_created') return;
+  if (msg.type === 'room_cancelled') {
+    cancelWaiting();
+    return;
+  }
+  if (msg.type === 'start') {
+    clearTimeout(retryTimer);
+    clearWaitingTimer();
+    waitingMode = null;
+    document.getElementById('cancel-waiting').style.display = 'none';
+    mySymbol = msg.symbol;
+    starter = 'X';
+    turn = 'X';
+    if (mySymbol === 'X') {
+      document.getElementById('lbl-x').textContent = 'YOU (X)';
+      document.getElementById('lbl-o').textContent = 'OPPONENT (O)';
+    } else {
+      document.getElementById('lbl-x').textContent = 'OPPONENT (X)';
+      document.getElementById('lbl-o').textContent = 'YOU (O)';
+    }
+    updateSc();
+    // Hide all online menus
+    document.getElementById('online-menu').classList.remove('on');
+    document.getElementById('code-prompt').classList.remove('on');
+    setStatus(mySymbol === turn ? 'YOUR MOVE' : 'OPPONENT\'S MOVE', turn === 'X' ? 'sx' : 'so');
+    highlight();
+    hideStatus();
+  } else if (msg.type === 'move') {
+    const idx = msg.data.index;
+    if (!state[idx] && !over) {
+      turn = mySymbol === 'X' ? 'O' : 'X';
+      place(idx);
+    }
+  } else if (msg.type === 'opponent_disconnected') {
+    setStatus('OPPONENT DISCONNECTED', 'sd');
+    over = true;
+    disconnectOnline();
+    setMode('pvp');
+  } else if (msg.type === 'error') {
+    showStatus(msg.message, 3000);
+  }
+}
+
+// ──────────────────── Mode switching ────────────────────
 function setMode(m) {
-  if (mode === 'online' && m !== 'online') leaveOnline();
+  if (mode === 'online' && m !== 'online') disconnectOnline();
   if (m === 'online') {
     starter = 'X';
     mode = 'online';
@@ -512,15 +825,15 @@ function setMode(m) {
     document.getElementById('online-btn').classList.add('on');
     document.getElementById('lbl-o').textContent = 'PLAYER O';
     updateSc();
-    newGame();   // resets board and starts online flow
-    connectOnline();
+    newGame();   // reset board
+    showOnlineMenu();  // show menu instead of auto-connecting
   } else {
     starter = 'X';
     mode = m;
     sc = scBank[m];
     document.getElementById('pvp-btn').classList.toggle('on', m==='pvp');
     document.getElementById('cpu-btn').classList.toggle('on', m==='cpu');
-    document.getElementById('online-btn').classList.toggle('on', m==='online');
+    document.getElementById('online-btn').classList.remove('on');
     document.getElementById('lbl-o').textContent = m==='cpu' ? 'CPU O' : 'PLAYER O';
     document.getElementById('lbl-x').textContent = 'PLAYER X';
     updateSc();
@@ -528,18 +841,24 @@ function setMode(m) {
   }
 }
 
+// ─── Fixed newGame: also clears win lines ───
 function newGame() {
+  clearTimers();
+  // Remove all win lines
+  document.querySelectorAll('.win-line').forEach(e => e.remove());
+
+  state = Array(9).fill('');
+  over = false;
+  cells.forEach(c => {
+    c.className = '';
+    c.querySelector('.mark').textContent = '';
+  });
+
   if (mode === 'online') {
-    clearTimers();
-    state = Array(9).fill('');
-    over = false;
-    cells.forEach(c => {
-      c.className = '';
-      c.querySelector('.mark').textContent = '';
-    });
-    document.querySelectorAll('.win-line').forEach(e => e.remove());
-    if (ws) { ws.onclose = null; ws.close(); ws = null; }
-    connectOnline();
+    // Show online menu again (or waiting screen if already in a game)
+    if (!mySymbol) {
+      showOnlineMenu();
+    }
   } else {
     init();
   }
@@ -551,12 +870,26 @@ function resetAll() {
   sc = scBank[mode];
   updateSc();
   if (mode === 'online') {
+    disconnectOnline();
     newGame();
+    showOnlineMenu();
   } else {
     newGame();
   }
 }
 
+function showStatus(msg, duration) {
+  const el = document.getElementById('status-msg');
+  el.textContent = msg;
+  el.style.display = 'block';
+  if (duration) setTimeout(() => el.style.display = 'none', duration);
+}
+
+function hideStatus() {
+  document.getElementById('status-msg').style.display = 'none';
+}
+
+// Particle burst (unchanged)
 function burst(td) {
   const r=td.getBoundingClientRect();
   const cx=r.left+r.width/2, cy=r.top+r.height/2;
@@ -571,6 +904,7 @@ function burst(td) {
   }
 }
 
+// Initialise
 init();
 </script>
 </body>
