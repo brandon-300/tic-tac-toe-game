@@ -6,7 +6,7 @@
 <title>TIC · TAC · TOE</title>
 <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Share+Tech+Mono&display=swap" rel="stylesheet">
 <style>
-  /* ─── All your original styles ─── */
+  /* ─── All original styles ─── */
   :root {
     --bg: #080c14;
     --panel: #0d1424;
@@ -285,6 +285,8 @@
   }
   #cancel-waiting:active { color: var(--o-color); border-color: var(--o-color); }
 
+  #rejoin-btn { display: none; }
+
   /* Chat */
   #chat-panel { position:fixed; right:10px; top:60px; width:200px; max-height:250px; background:rgba(10,10,20,0.9); border:1px solid var(--border); display:none; flex-direction:column; z-index:200; font-family:'Orbitron',monospace; }
   #chat-panel.on { display:flex; }
@@ -362,6 +364,7 @@
     <h2 style="color:var(--o-color); margin-bottom:20px;">ONLINE PLAY</h2>
     <button class="menu-btn" onclick="showPublicOptions()">PUBLIC</button>
     <button class="menu-btn" onclick="showPrivateOptions()">PRIVATE</button>
+    <button class="menu-btn" id="rejoin-btn" style="display:none;" onclick="rejoinSession()">REJOIN SESSION</button>
     <button class="menu-btn" onclick="hideOnlineMenu()">BACK</button>
   </div>
   <div id="online-public" class="menu-card" style="display:none;">
@@ -418,6 +421,7 @@
 
 <script>
 const WS_URL = 'wss://anichan-game-server.onrender.com';
+const SESSION_KEY = 'ttt_session';
 
 const WINS = [[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]];
 let cells, state, turn, over, mode = 'pvp';
@@ -430,7 +434,7 @@ let ws = null;
 let mySymbol = null;
 let roomId = null;
 let isHost = false;
-let roomCode = null;        // stored for private reconnect
+let roomCode = null;
 let waitingTimer = null;
 let waitingMode = null;
 let waitingSubMenu = null;
@@ -439,7 +443,45 @@ let autoReconnectTimer = null;
 let chatOpen = false;
 let autoTimer = null, countTimer = null;
 
-// ─── Sound effect ───
+// ─── Session storage ───
+function saveSession() {
+  if (!roomId || !mySymbol || mode !== 'online') return;
+  try {
+    localStorage.setItem(SESSION_KEY, JSON.stringify({
+      roomId, symbol: mySymbol, isHost, code: roomCode, timestamp: Date.now()
+    }));
+  } catch(e) {}
+}
+
+function clearSession() {
+  localStorage.removeItem(SESSION_KEY);
+}
+
+function loadSession() {
+  try {
+    const raw = localStorage.getItem(SESSION_KEY);
+    if (!raw) return null;
+    const data = JSON.parse(raw);
+    // Expire after 5 minutes
+    if (Date.now() - data.timestamp > 300000) {
+      localStorage.removeItem(SESSION_KEY);
+      return null;
+    }
+    return data;
+  } catch(e) { return null; }
+}
+
+function updateRejoinButton() {
+  const session = loadSession();
+  const btn = document.getElementById('rejoin-btn');
+  if (session) {
+    btn.style.display = 'block';
+  } else {
+    btn.style.display = 'none';
+  }
+}
+
+// ─── Sound ───
 function playTap() {
   try {
     const ctx = new (window.AudioContext || window.webkitAudioContext)();
@@ -523,7 +565,7 @@ function place(i) {
   const td = cells[i];
   td.classList.add('filled', turn === 'X' ? 'cx' : 'co');
   td.querySelector('.mark').textContent = turn;
-  playTap();               // sound on every move
+  playTap();
   burst(td);
 
   const w = winner();
@@ -541,6 +583,7 @@ function place(i) {
     const lbl = mode === 'cpu' && turn === 'O' ? 'CPU O — THINKING...' : (mode === 'online' ? (turn === mySymbol ? 'YOUR MOVE' : 'OPPONENT\'S MOVE') : 'PLAYER ' + turn + ' — YOUR MOVE');
     setStatus(lbl, turn === 'X' ? 'sx' : 'so');
     highlight();
+    saveSession(); // update stored board state
   }
 }
 
@@ -549,23 +592,20 @@ function winner() {
   return null;
 }
 
-// ─── Very Hard AI (minimax depth 8) ───
+// ─── AI ───
 function cpuGo() {
   const best = minimax(state.slice(), 'O', 0, -Infinity, Infinity);
   if (best.index !== undefined) place(best.index);
 }
 
 function minimax(board, player, depth, alpha, beta) {
-  // check winner
   for (const c of WINS) {
     if (c.every(i => board[i] === 'O')) return { score: 10 - depth };
     if (c.every(i => board[i] === 'X')) return { score: depth - 10 };
   }
   if (board.every(Boolean)) return { score: 0 };
-
   const moves = [];
   for (let i = 0; i < 9; i++) if (!board[i]) moves.push(i);
-
   if (player === 'O') {
     let best = { score: -Infinity, index: moves[0] };
     for (const i of moves) {
@@ -591,7 +631,7 @@ function minimax(board, player, depth, alpha, beta) {
   }
 }
 
-// ─── Win line (perfect) ───
+// ─── Win line ───
 function drawWin(combo) {
   document.querySelectorAll('.win-line').forEach(e => e.remove());
   const wrap = document.getElementById('board-wrap');
@@ -632,6 +672,7 @@ function showOnlineMenu() {
   document.getElementById('online-main').style.display = '';
   document.getElementById('online-public').style.display = 'none';
   document.getElementById('online-private').style.display = 'none';
+  updateRejoinButton();
 }
 
 function hideOnlineMenu() {
@@ -655,6 +696,7 @@ function backToOnlineMain() {
   document.getElementById('online-main').style.display = '';
   document.getElementById('online-public').style.display = 'none';
   document.getElementById('online-private').style.display = 'none';
+  updateRejoinButton();
 }
 
 let pendingAction = null;
@@ -699,14 +741,33 @@ function createRoom(type) {
 
 function joinRoom(type, code) {
   waitingSubMenu = type;
-  // If we already have a roomId (reconnect), try to rejoin
-  if (roomId && mySymbol) {
-    showWaitingScreen('RECONNECTING...');
-    attemptReconnect(type, code);
-    return;
-  }
   showWaitingScreen('SEARCHING FOR GAME...');
   sendJoinRoom(type, code);
+}
+
+function rejoinSession() {
+  const session = loadSession();
+  if (!session) {
+    showStatus('No previous session found.', 2000);
+    return;
+  }
+  roomId = session.roomId;
+  mySymbol = session.symbol;
+  isHost = session.isHost;
+  roomCode = session.code;
+  waitingSubMenu = roomCode ? 'private' : 'public';
+  showWaitingScreen('RECONNECTING...');
+  ws = new WebSocket(WS_URL);
+  ws.onopen = () => {
+    ws.send(JSON.stringify({
+      type: 'rejoin',
+      game: 'tic-tac-toe',
+      roomId: roomId,
+      symbol: mySymbol,
+      code: roomCode || undefined,
+    }));
+  };
+  setupWS();
 }
 
 function showWaitingScreen(msg) {
@@ -714,7 +775,7 @@ function showWaitingScreen(msg) {
   document.getElementById('code-prompt').classList.remove('on');
   document.getElementById('cancel-waiting').style.display = 'block';
   showStatus(msg, 0);
-  waitingMode = msg.includes('WAITING') ? 'create' : 'join';
+  waitingMode = msg.includes('WAITING') ? 'create' : (msg.includes('RECONNECT') ? 'rejoin' : 'join');
 }
 
 function cancelWaiting() {
@@ -729,13 +790,12 @@ function cancelWaiting() {
   disconnectOnline();
   if (waitingSubMenu === 'public') {
     showPublicOptions();
-    document.getElementById('online-menu').classList.add('on');
   } else if (waitingSubMenu === 'private') {
     showPrivateOptions();
-    document.getElementById('online-menu').classList.add('on');
   } else {
     showOnlineMenu();
   }
+  document.getElementById('online-menu').classList.add('on');
 }
 
 function clearWaitingTimer() {
@@ -751,9 +811,10 @@ function disconnectOnline() {
   roomId = null;
   isHost = false;
   roomCode = null;
+  clearSession();
 }
 
-// ─── WebSocket helpers ───
+// ─── WebSocket ───
 function sendCreateRoom(type, code) {
   disconnectOnline();
   const doCreate = () => {
@@ -794,21 +855,6 @@ function sendJoinRoom(type, code) {
   doJoin();
 }
 
-function attemptReconnect(type, code) {
-  disconnectOnline(); // close old socket but keep roomId etc.
-  ws = new WebSocket(WS_URL);
-  ws.onopen = () => {
-    ws.send(JSON.stringify({
-      type: 'reconnect',
-      game: 'tic-tac-toe',
-      roomId: roomId,
-      symbol: mySymbol,
-      code: code || roomCode || undefined,
-    }));
-  };
-  setupWS();
-}
-
 function setupWS() {
   ws.onmessage = handleWSMessage;
   ws.onclose = onWSClose;
@@ -827,7 +873,7 @@ function scheduleReconnect() {
   autoReconnectTimer = setTimeout(() => {
     ws = new WebSocket(WS_URL);
     ws.onopen = () => {
-      ws.send(JSON.stringify({ type: 'reconnect', game: 'tic-tac-toe', roomId, symbol: mySymbol, code: roomCode || undefined }));
+      ws.send(JSON.stringify({ type: 'rejoin', game: 'tic-tac-toe', roomId, symbol: mySymbol, code: roomCode || undefined }));
     };
     setupWS();
   }, 3000);
@@ -838,6 +884,7 @@ function handleWSMessage(e) {
   if (msg.type === 'room_created') {
     roomId = msg.roomId;
     isHost = true;
+    saveSession();
     return;
   }
   if (msg.type === 'room_cancelled') { cancelWaiting(); return; }
@@ -870,6 +917,7 @@ function handleWSMessage(e) {
     setStatus(mySymbol === turn ? 'YOUR MOVE' : 'OPPONENT\'S MOVE', turn === 'X' ? 'sx' : 'so');
     highlight();
     hideStatus();
+    saveSession();
   } else if (msg.type === 'resume') {
     mySymbol = msg.symbol;
     turn = msg.turn;
@@ -887,11 +935,13 @@ function handleWSMessage(e) {
     highlight();
     hideStatus();
     clearTimeout(autoReconnectTimer);
+    saveSession();
   } else if (msg.type === 'move') {
     const idx = msg.data.index;
     if (!state[idx] && !over) {
       turn = mySymbol === 'X' ? 'O' : 'X';
       place(idx);
+      saveSession();
     }
   } else if (msg.type === 'opponent_disconnected') {
     setStatus('OPPONENT DISCONNECTED - WAITING FOR RECONNECT', 'sd');
@@ -906,6 +956,7 @@ function handleWSMessage(e) {
     }, 5000);
   } else if (msg.type === 'error') {
     showStatus(msg.message, 3000);
+    if (waitingMode) cancelWaiting();
   } else if (msg.type === 'chat') {
     appendChatMessage('Opponent', msg.text);
   }
@@ -989,7 +1040,7 @@ function newGame() {
   cells.forEach(c => { c.className = ''; c.querySelector('.mark').textContent = ''; });
   turn = starter;
   if (mode === 'online') {
-    // handled by start/resume
+    // game restarted via rematch start message
   } else {
     init();
   }
@@ -1014,9 +1065,7 @@ function handleResetScores() {
   newGame();
 }
 
-function resetAll() {
-  handleResetScores();
-}
+function resetAll() { handleResetScores(); }
 
 function showStatus(msg, duration) {
   const el = document.getElementById('status-msg');
