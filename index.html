@@ -285,13 +285,13 @@
   }
   #cancel-waiting:active { color: var(--o-color); border-color: var(--o-color); }
 
-  /* Chat panel (similar to chess but themed) */
+  /* Chat */
   #chat-panel { position:fixed; right:10px; top:60px; width:200px; max-height:250px; background:rgba(10,10,20,0.9); border:1px solid var(--border); display:none; flex-direction:column; z-index:200; font-family:'Orbitron',monospace; }
   #chat-panel.on { display:flex; }
   #chat-messages { flex:1; overflow-y:auto; padding:8px; font-size:10px; color:var(--bright); max-height:150px; }
   #chat-messages div { margin-bottom:6px; line-height:1.3; }
   #chat-input-row { display:flex; border-top:1px solid var(--border); }
-  #chat-input { flex:1; background:transparent; border:none; color:var(--bright); padding:6px; font-family:inherit; font-size:10px; }
+  #chat-input { flex:1; background:transparent; border:none; color:var(--bright); padding:6px; font-family:inherit; font-size:10px; text-transform:none; }
   #chat-send { background:transparent; border:none; color:var(--o-color); padding:6px 10px; cursor:pointer; font-family:inherit; font-size:10px; }
   #chat-toggle { position:fixed; right:10px; top:30px; z-index:201; font-family:'Orbitron',sans-serif; background:var(--panel); border:1px solid var(--border); color:var(--dim); padding:5px 10px; cursor:pointer; display:none; font-size:10px; }
   #chat-toggle.on { display:block; }
@@ -390,7 +390,7 @@
   </div>
 </div>
 
-<!-- Warning overlay (mode switch during online game) -->
+<!-- Warning overlay -->
 <div id="warning-overlay">
   <div class="menu-card">
     <h2 style="color:var(--x-color); margin-bottom:16px;">LEAVE GAME?</h2>
@@ -406,7 +406,7 @@
 <!-- Cancel waiting button -->
 <button id="cancel-waiting" onclick="cancelWaiting()">CANCEL</button>
 
-<!-- Chat toggle & panel -->
+<!-- Chat -->
 <button id="chat-toggle" onclick="toggleChat()">💬</button>
 <div id="chat-panel">
   <div id="chat-messages"></div>
@@ -430,16 +430,16 @@ let ws = null;
 let mySymbol = null;
 let roomId = null;
 let isHost = false;
+let roomCode = null;        // stored for private reconnect
 let waitingTimer = null;
 let waitingMode = null;
 let waitingSubMenu = null;
 let retryTimer = null;
 let autoReconnectTimer = null;
 let chatOpen = false;
-
 let autoTimer = null, countTimer = null;
 
-// Sound effect (simple tap)
+// ─── Sound effect ───
 function playTap() {
   try {
     const ctx = new (window.AudioContext || window.webkitAudioContext)();
@@ -468,12 +468,8 @@ function init() {
   state = Array(9).fill('');
   turn = starter;
   over = false;
-  cells.forEach(c => {
-    c.className = '';
-    c.querySelector('.mark').textContent = '';
-  });
+  cells.forEach(c => { c.className = ''; c.querySelector('.mark').textContent = ''; });
   document.querySelectorAll('.win-line').forEach(e => e.remove());
-
   if (mode !== 'online') {
     const startLbl = mode === 'cpu' && starter === 'O' ? 'CPU O — THINKING...' : 'PLAYER ' + starter + ' — YOUR MOVE';
     setStatus(startLbl, starter === 'X' ? 'sx' : 'so');
@@ -527,7 +523,7 @@ function place(i) {
   const td = cells[i];
   td.classList.add('filled', turn === 'X' ? 'cx' : 'co');
   td.querySelector('.mark').textContent = turn;
-  playTap();
+  playTap();               // sound on every move
   burst(td);
 
   const w = winner();
@@ -553,16 +549,18 @@ function winner() {
   return null;
 }
 
-// Very hard AI (minimax depth 8)
+// ─── Very Hard AI (minimax depth 8) ───
 function cpuGo() {
-  const best = minimax(state, 'O', 0, -Infinity, Infinity).index;
-  if (best !== undefined) place(best);
+  const best = minimax(state.slice(), 'O', 0, -Infinity, Infinity);
+  if (best.index !== undefined) place(best.index);
 }
 
 function minimax(board, player, depth, alpha, beta) {
-  const winner = checkWin(board, player === 'O' ? 'X' : 'O');
-  if (winner === 'O') return { score: 10 - depth };
-  if (winner === 'X') return { score: depth - 10 };
+  // check winner
+  for (const c of WINS) {
+    if (c.every(i => board[i] === 'O')) return { score: 10 - depth };
+    if (c.every(i => board[i] === 'X')) return { score: depth - 10 };
+  }
   if (board.every(Boolean)) return { score: 0 };
 
   const moves = [];
@@ -593,11 +591,7 @@ function minimax(board, player, depth, alpha, beta) {
   }
 }
 
-function checkWin(board, player) {
-  for (const c of WINS) if (c.every(i => board[i] === player)) return player;
-  return null;
-}
-
+// ─── Win line (perfect) ───
 function drawWin(combo) {
   document.querySelectorAll('.win-line').forEach(e => e.remove());
   const wrap = document.getElementById('board-wrap');
@@ -689,8 +683,10 @@ function submitCode() {
   if (pendingAction === 'create') {
     waitingSubMenu = 'private';
     showWaitingScreen('WAITING FOR OPPONENT...');
+    roomCode = code;
     sendCreateRoom('private', code);
   } else {
+    roomCode = code;
     joinRoom('private', code);
   }
 }
@@ -703,7 +699,7 @@ function createRoom(type) {
 
 function joinRoom(type, code) {
   waitingSubMenu = type;
-  // If we have a stored roomId, try to reconnect first
+  // If we already have a roomId (reconnect), try to rejoin
   if (roomId && mySymbol) {
     showWaitingScreen('RECONNECTING...');
     attemptReconnect(type, code);
@@ -754,9 +750,10 @@ function disconnectOnline() {
   mySymbol = null;
   roomId = null;
   isHost = false;
+  roomCode = null;
 }
 
-// ─── Connection functions ───
+// ─── WebSocket helpers ───
 function sendCreateRoom(type, code) {
   disconnectOnline();
   const doCreate = () => {
@@ -769,10 +766,7 @@ function sendCreateRoom(type, code) {
       showStatus('WAITING FOR OPPONENT...', 0);
       clearWaitingTimer();
       waitingTimer = setTimeout(() => {
-        if (waitingMode === 'create') {
-          cancelWaiting();
-          showStatus('NO OPPONENT JOINED', 3000);
-        }
+        if (waitingMode === 'create') { cancelWaiting(); showStatus('NO OPPONENT JOINED', 3000); }
       }, 600000);
     };
     setupWS();
@@ -792,11 +786,7 @@ function sendJoinRoom(type, code) {
       showStatus('SEARCHING FOR GAME...', 0);
       clearWaitingTimer();
       waitingTimer = setTimeout(() => {
-        if (waitingMode === 'join') {
-          cancelWaiting();
-          if (type === 'private') showStatus('NO ROOM FOUND FOR THAT CODE', 3000);
-          else showStatus('NO OPPONENT FOUND', 3000);
-        }
+        if (waitingMode === 'join') { cancelWaiting(); showStatus(type==='private'?'NO ROOM FOUND':'NO OPPONENT FOUND', 3000); }
       }, 600000);
     };
     setupWS();
@@ -805,7 +795,7 @@ function sendJoinRoom(type, code) {
 }
 
 function attemptReconnect(type, code) {
-  disconnectOnline();
+  disconnectOnline(); // close old socket but keep roomId etc.
   ws = new WebSocket(WS_URL);
   ws.onopen = () => {
     ws.send(JSON.stringify({
@@ -813,7 +803,7 @@ function attemptReconnect(type, code) {
       game: 'tic-tac-toe',
       roomId: roomId,
       symbol: mySymbol,
-      code: code || undefined,
+      code: code || roomCode || undefined,
     }));
   };
   setupWS();
@@ -837,7 +827,7 @@ function scheduleReconnect() {
   autoReconnectTimer = setTimeout(() => {
     ws = new WebSocket(WS_URL);
     ws.onopen = () => {
-      ws.send(JSON.stringify({ type: 'reconnect', game: 'tic-tac-toe', roomId, symbol: mySymbol }));
+      ws.send(JSON.stringify({ type: 'reconnect', game: 'tic-tac-toe', roomId, symbol: mySymbol, code: roomCode || undefined }));
     };
     setupWS();
   }, 3000);
@@ -850,10 +840,7 @@ function handleWSMessage(e) {
     isHost = true;
     return;
   }
-  if (msg.type === 'room_cancelled') {
-    cancelWaiting();
-    return;
-  }
+  if (msg.type === 'room_cancelled') { cancelWaiting(); return; }
   if (msg.type === 'start') {
     clearTimeout(retryTimer);
     clearWaitingTimer();
@@ -862,6 +849,7 @@ function handleWSMessage(e) {
     document.getElementById('cancel-waiting').style.display = 'none';
     mySymbol = msg.symbol;
     isHost = (mySymbol === 'X');
+    roomId = msg.roomId;
     starter = msg.turn;
     turn = starter;
     state = Array(9).fill('');
@@ -952,16 +940,12 @@ function showWarningOverlay() {
   document.getElementById('warning-overlay').classList.add('on');
   document.getElementById('warn-exit').onclick = () => {
     document.getElementById('warning-overlay').classList.remove('on');
-    // Disconnect
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: 'leave_room', game: 'tic-tac-toe' }));
     }
     disconnectOnline();
-    // Return to mode specific action
-    if (mode === 'online') {
-      setMode('pvp');
-      showOnlineMenu();
-    }
+    setMode('pvp');
+    showOnlineMenu();
   };
   document.getElementById('warn-return').onclick = () => {
     document.getElementById('warning-overlay').classList.remove('on');
@@ -971,9 +955,8 @@ function showWarningOverlay() {
 // ─── Mode switching ───
 function setMode(m) {
   if (mode === 'online' && m !== 'online' && mySymbol) {
-    // Show warning instead of immediate switch
     showWarningOverlay();
-    return; // don't switch yet
+    return;
   }
   applyMode(m);
 }
@@ -995,9 +978,7 @@ function applyMode(m) {
   }
   updateSc();
   newGame();
-  if (m === 'online') {
-    showOnlineMenu();
-  }
+  if (m === 'online') showOnlineMenu();
 }
 
 function newGame() {
@@ -1008,14 +989,14 @@ function newGame() {
   cells.forEach(c => { c.className = ''; c.querySelector('.mark').textContent = ''; });
   turn = starter;
   if (mode === 'online') {
-    // handled by start/resume messages
+    // handled by start/resume
   } else {
     init();
   }
 }
 
 function handleNewGame() {
-  if (mode === 'online') {
+  if (mode === 'online' && mySymbol) {
     showStatus('Cannot start new game during online match.', 2000);
     return;
   }
@@ -1023,7 +1004,7 @@ function handleNewGame() {
 }
 
 function handleResetScores() {
-  if (mode === 'online') {
+  if (mode === 'online' && mySymbol) {
     showStatus('Cannot reset scores during online match.', 2000);
     return;
   }
@@ -1034,10 +1015,6 @@ function handleResetScores() {
 }
 
 function resetAll() {
-  if (mode === 'online') {
-    showStatus('Cannot reset scores during online match.', 2000);
-    return;
-  }
   handleResetScores();
 }
 
