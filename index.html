@@ -398,12 +398,14 @@ let sc = scBank.pvp;
 // Multiplayer state
 let ws = null;
 let mySymbol = null;
+let roomId = null;          // stored for reconnect
 let waitingTimer = null;
-let waitingMode = null;          // 'create' or 'join'
-let waitingSubMenu = null;       // 'public' or 'private'
+let waitingMode = null;
+let waitingSubMenu = null;
 let retryCount = 0;
 const MAX_RETRIES = 5;
 let retryTimer = null;
+let autoReconnectTimer = null;
 
 let autoTimer = null, countTimer = null;
 
@@ -423,7 +425,6 @@ function init() {
     c.className = '';
     c.querySelector('.mark').textContent = '';
   });
-  // Clear any leftover win lines
   document.querySelectorAll('.win-line').forEach(e => e.remove());
 
   if (mode !== 'online') {
@@ -443,12 +444,22 @@ function startAutoReset(baseMsg, cls) {
       setStatus(baseMsg + '  ·  NEW GAME IN ' + secs + 's', cls);
     } else {
       clearInterval(countTimer);
+      if (mode === 'online') {
+        // Send rematch request instead of newGame()
+        requestRematch();
+      } else {
+        newGame();
+      }
     }
   }, 1000);
-  autoTimer = setTimeout(() => {
-    clearInterval(countTimer);
-    newGame();
-  }, 5000);
+  autoTimer = null; // don't use setTimeout directly; interval does the job
+}
+
+function requestRematch() {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: 'rematch', game: 'tic-tac-toe' }));
+  }
+  // The server will send a new 'start' message that will reset the board and turn
 }
 
 function tap(i) {
@@ -511,34 +522,21 @@ function bestMove() {
 
 function canWin(p) { return WINS.some(w => w.every(i => state[i]===p)); }
 
-// ─── PERFECT win line drawing ───
 function drawWin(combo) {
-  // Remove any existing win lines first
   document.querySelectorAll('.win-line').forEach(e => e.remove());
-
   const wrap = document.getElementById('board-wrap');
   const wr = wrap.getBoundingClientRect();
   const a = cells[combo[0]].getBoundingClientRect();
   const b = cells[combo[2]].getBoundingClientRect();
-
-  // Center of the first winning cell
   const x1 = a.left + a.width/2 - wr.left;
   const y1 = a.top + a.height/2 - wr.top;
-  // Center of the last winning cell
   const x2 = b.left + b.width/2 - wr.left;
   const y2 = b.top + b.height/2 - wr.top;
-
   const len = Math.hypot(x2 - x1, y2 - y1);
   const ang = Math.atan2(y2 - y1, x2 - x1) * 180 / Math.PI;
-
   const ln = document.createElement('div');
   ln.className = 'win-line';
-  ln.style.cssText = `
-    width: ${len}px;
-    left: ${x1}px;
-    top: ${y1 - 2}px;        /* minus half the line height to vertically centre */
-    transform: rotate(${ang}deg);
-  `;
+  ln.style.cssText = `width:${len}px;left:${x1}px;top:${y1 - 2}px;transform:rotate(${ang}deg);`;
   wrap.appendChild(ln);
 }
 
@@ -568,7 +566,6 @@ function showOnlineMenu() {
 
 function hideOnlineMenu() {
   document.getElementById('online-menu').classList.remove('on');
-  // Return to local pvp mode
   setMode('pvp');
 }
 
@@ -625,7 +622,7 @@ function submitCode() {
 function createRoom(type) {
   waitingSubMenu = type;
   showWaitingScreen('WAITING FOR OPPONENT...');
-  sendCreateRoom(type, type === 'public' ? null : undefined); // public has no code
+  sendCreateRoom(type, type === 'public' ? null : undefined);
 }
 
 function joinRoom(type, code) {
@@ -652,7 +649,6 @@ function cancelWaiting() {
     ws.send(JSON.stringify({ type: 'leave_room', game: 'tic-tac-toe' }));
   }
   disconnectOnline();
-  // Return to appropriate sub-menu
   if (waitingSubMenu === 'public') {
     showPublicOptions();
     document.getElementById('online-menu').classList.add('on');
@@ -670,13 +666,15 @@ function clearWaitingTimer() {
 
 function disconnectOnline() {
   clearTimeout(retryTimer);
+  clearTimeout(autoReconnectTimer);
   clearWaitingTimer();
   if (ws) { ws.onclose = null; ws.close(); ws = null; }
   mySymbol = null;
+  roomId = null;
   retryCount = 0;
 }
 
-// ──────────────────── WebSocket connection with retry ────────────────────
+// ──────────────────── WebSocket with auto-reconnect ────────────────────
 function sendCreateRoom(type, code) {
   retryCount = 0;
   showStatus('CONNECTING...', 0);
@@ -708,7 +706,7 @@ function attemptCreateRoom(type, code) {
         cancelWaiting();
         showStatus('NO OPPONENT JOINED', 3000);
       }
-    }, 600000); // 10 minutes
+    }, 600000);
   };
   ws.onmessage = handleWSMessage;
   ws.onerror = () => {};
@@ -768,21 +766,34 @@ function attemptJoinRoom(type, code) {
   };
 }
 
+// ──────────────────── Message handler ────────────────────
 function handleWSMessage(e) {
   const msg = JSON.parse(e.data);
-  if (msg.type === 'room_created') return;
+  if (msg.type === 'room_created') {
+    roomId = msg.roomId;
+    return;
+  }
   if (msg.type === 'room_cancelled') {
     cancelWaiting();
     return;
   }
   if (msg.type === 'start') {
+    // New game (initial or after rematch)
     clearTimeout(retryTimer);
     clearWaitingTimer();
+    clearTimeout(autoReconnectTimer);
     waitingMode = null;
     document.getElementById('cancel-waiting').style.display = 'none';
     mySymbol = msg.symbol;
-    starter = 'X';
-    turn = 'X';
+    starter = msg.turn;   // who starts this round
+    turn = starter;
+    state = Array(9).fill('');
+    over = false;
+    cells.forEach(c => {
+      c.className = '';
+      c.querySelector('.mark').textContent = '';
+    });
+    document.querySelectorAll('.win-line').forEach(e => e.remove());
     if (mySymbol === 'X') {
       document.getElementById('lbl-x').textContent = 'YOU (X)';
       document.getElementById('lbl-o').textContent = 'OPPONENT (O)';
@@ -791,12 +802,31 @@ function handleWSMessage(e) {
       document.getElementById('lbl-o').textContent = 'YOU (O)';
     }
     updateSc();
-    // Hide all online menus
     document.getElementById('online-menu').classList.remove('on');
     document.getElementById('code-prompt').classList.remove('on');
     setStatus(mySymbol === turn ? 'YOUR MOVE' : 'OPPONENT\'S MOVE', turn === 'X' ? 'sx' : 'so');
     highlight();
     hideStatus();
+  } else if (msg.type === 'resume') {
+    // Reconnected successfully
+    mySymbol = msg.symbol;
+    roomId = msg.roomId;
+    turn = msg.turn;
+    state = msg.board ? msg.board.slice() : Array(9).fill('');
+    over = false;
+    // Redraw the board
+    state.forEach((val, i) => {
+      if (val) {
+        const td = cells[i];
+        td.classList.add('filled', val === 'X' ? 'cx' : 'co');
+        td.querySelector('.mark').textContent = val;
+      }
+    });
+    document.querySelectorAll('.win-line').forEach(e => e.remove());
+    setStatus(mySymbol === turn ? 'YOUR MOVE' : 'OPPONENT\'S MOVE', turn === 'X' ? 'sx' : 'so');
+    highlight();
+    hideStatus();
+    clearTimeout(autoReconnectTimer);
   } else if (msg.type === 'move') {
     const idx = msg.data.index;
     if (!state[idx] && !over) {
@@ -804,13 +834,120 @@ function handleWSMessage(e) {
       place(idx);
     }
   } else if (msg.type === 'opponent_disconnected') {
-    setStatus('OPPONENT DISCONNECTED', 'sd');
-    over = true;
-    disconnectOnline();
-    setMode('pvp');
+    setStatus('OPPONENT DISCONNECTED - WAITING FOR RECONNECT', 'sd');
+    // Don't end the game; wait for opponent to reconnect
+  } else if (msg.type === 'opponent_reconnected') {
+    setStatus('OPPONENT RECONNECTED', 'sy');
   } else if (msg.type === 'error') {
     showStatus(msg.message, 3000);
   }
+}
+
+// ──────────────────── Auto-reconnect logic ────────────────────
+function scheduleReconnect() {
+  if (!roomId || !mySymbol || mode !== 'online') return;
+  autoReconnectTimer = setTimeout(() => {
+    attemptReconnect();
+  }, 2000);
+}
+
+function attemptReconnect() {
+  if (ws && ws.readyState === WebSocket.OPEN) return; // already connected
+  ws = new WebSocket(WS_URL);
+  ws.onopen = () => {
+    ws.send(JSON.stringify({
+      type: 'reconnect',
+      game: 'tic-tac-toe',
+      roomId: roomId,
+      symbol: mySymbol,
+    }));
+  };
+  ws.onmessage = (e) => {
+    handleWSMessage(e);
+    // If we get a resume, reconnect is successful
+    // If we get an error, maybe room is gone; fallback to disconnect
+  };
+  ws.onclose = () => {
+    // Retry after a delay
+    autoReconnectTimer = setTimeout(() => attemptReconnect(), 3000);
+  };
+  ws.onerror = () => {};
+}
+
+// When WebSocket closes unexpectedly during a game, try to reconnect
+function onWSClose(event) {
+  if (mode === 'online' && mySymbol && roomId && !over) {
+    setStatus('CONNECTION LOST - RECONNECTING...', 'sd');
+    scheduleReconnect();
+  }
+}
+
+// Override the close handler in all connection functions
+function attachWSHandlers() {
+  if (!ws) return;
+  ws.onmessage = handleWSMessage;
+  ws.onclose = onWSClose;
+  ws.onerror = () => {};
+}
+
+// Modify connection functions to use attachWSHandlers
+function attemptCreateRoom(type, code) {
+  if (retryCount >= MAX_RETRIES) {
+    hideStatus();
+    showStatus('COULD NOT CONNECT', 2000);
+    cancelWaiting();
+    return;
+  }
+  ws = new WebSocket(WS_URL);
+  attachWSHandlers();
+  ws.onopen = () => {
+    let msg;
+    if (type === 'public') {
+      msg = JSON.stringify({ type: 'create_public', game: 'tic-tac-toe' });
+    } else {
+      msg = JSON.stringify({ type: 'create_private', game: 'tic-tac-toe', code });
+    }
+    ws.send(msg);
+    showStatus('WAITING FOR OPPONENT...', 0);
+    retryCount = 0;
+    clearWaitingTimer();
+    waitingTimer = setTimeout(() => {
+      if (waitingMode === 'create') {
+        cancelWaiting();
+        showStatus('NO OPPONENT JOINED', 3000);
+      }
+    }, 600000);
+  };
+}
+
+function attemptJoinRoom(type, code) {
+  if (retryCount >= MAX_RETRIES) {
+    hideStatus();
+    showStatus('COULD NOT CONNECT', 2000);
+    cancelWaiting();
+    return;
+  }
+  ws = new WebSocket(WS_URL);
+  attachWSHandlers();
+  ws.onopen = () => {
+    let msg;
+    if (type === 'public') {
+      msg = JSON.stringify({ type: 'join_public', game: 'tic-tac-toe' });
+    } else {
+      msg = JSON.stringify({ type: 'join_private', game: 'tic-tac-toe', code });
+    }
+    ws.send(msg);
+    showStatus('SEARCHING FOR GAME...', 0);
+    retryCount = 0;
+    clearWaitingTimer();
+    waitingTimer = setTimeout(() => {
+      if (waitingMode === 'join') {
+        cancelWaiting();
+        if (type === 'private') showStatus('NO ROOM FOUND FOR THAT CODE', 3000);
+        else showStatus('NO OPPONENT FOUND', 3000);
+      }
+    }, 600000);
+  };
 }
 
 // ──────────────────── Mode switching ────────────────────
@@ -825,8 +962,8 @@ function setMode(m) {
     document.getElementById('online-btn').classList.add('on');
     document.getElementById('lbl-o').textContent = 'PLAYER O';
     updateSc();
-    newGame();   // reset board
-    showOnlineMenu();  // show menu instead of auto-connecting
+    newGame();
+    showOnlineMenu();
   } else {
     starter = 'X';
     mode = m;
@@ -841,21 +978,16 @@ function setMode(m) {
   }
 }
 
-// ─── Fixed newGame: also clears win lines ───
 function newGame() {
   clearTimers();
-  // Remove all win lines
   document.querySelectorAll('.win-line').forEach(e => e.remove());
-
   state = Array(9).fill('');
   over = false;
   cells.forEach(c => {
     c.className = '';
     c.querySelector('.mark').textContent = '';
   });
-
   if (mode === 'online') {
-    // Show online menu again (or waiting screen if already in a game)
     if (!mySymbol) {
       showOnlineMenu();
     }
@@ -904,7 +1036,6 @@ function burst(td) {
   }
 }
 
-// Initialise
 init();
 </script>
 </body>
